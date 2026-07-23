@@ -1,0 +1,8 @@
+confluent-kafka
+faker
+pyspark==3.4.0
+pandas
+pyarrow
+minio
+boto3
+findspark
