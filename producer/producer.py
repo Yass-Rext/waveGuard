@@ -238,3 +238,65 @@ def send_fraud_burst(sender_id: str, burst_size: int = 8):
         time.sleep(0.05)
 
     print(f" Burst terminé pour {sender_id}\n")
+
+
+
+# ==========================================================
+# Boucle principale
+# ==========================================================
+
+def main():
+    """
+    Lance la simulation des transactions Mobile Money.
+    """
+
+    print("=" * 60)
+    print("WaveGuard - Producteur Kafka")
+    print("=" * 60)
+    print(f"Broker : {BROKER}")
+    print(f"Topic  : {TOPIC}")
+    print("Simulation démarrée...\n")
+
+    try:
+
+        while True:
+
+            # ----------------------------
+            # Transaction normale
+            # ----------------------------
+            transaction = generate_transaction()
+
+            send_transaction(transaction)
+
+            print(
+                f"[NORMAL] "
+                f"{transaction['sender_id']} -> "
+                f"{transaction['receiver_id']} | "
+                f"{transaction['amount_fcfa']} FCFA"
+            )
+
+            # ----------------------------
+            # Déclenchement aléatoire d'une fraude
+            # ----------------------------
+            if random.random() < 0.05:
+
+                fraud_sender = random.choice(FRAUD_ACCOUNTS)
+
+                send_fraud_burst(fraud_sender)
+
+            # ----------------------------
+            # Pause entre deux transactions normales
+            # ----------------------------
+            time.sleep(0.5)
+
+    except KeyboardInterrupt:
+
+        print("\nArrêt demandé par l'utilisateur...")
+
+    finally:
+
+        print("Vidage du buffer Kafka...")
+
+        producer.flush()
+
+        print("Producteur arrêté.")
