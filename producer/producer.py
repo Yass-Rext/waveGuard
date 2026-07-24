@@ -150,3 +150,26 @@ def generate_transaction(fraud: bool = False):
     }
 
     return transaction
+
+
+# ==========================================================
+# Callback de confirmation d'envoi
+# ==========================================================
+
+def delivery_report(err, msg):
+    """
+    Callback appelé automatiquement par Kafka
+    après la tentative d'envoi d'un message.
+    """
+
+    if err is not None:
+        print(f"[ERREUR] Livraison échouée : {err}")
+        return
+
+    print(
+        f"[OK] "
+        f"Topic={msg.topic()} | "
+        f"Partition={msg.partition()} | "
+        f"Offset={msg.offset()} | "
+        f"Key={msg.key().decode('utf-8')}"
+    )
