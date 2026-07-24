@@ -196,3 +196,45 @@ def send_transaction(transaction: dict):
 
     # Déclenche les callbacks sans bloquer
     producer.poll(0)
+
+
+# ==========================================================
+# Simulation d'une attaque par vélocité
+# ==========================================================
+
+def send_fraud_burst(sender_id: str, burst_size: int = 8):
+    """
+    Envoie une rafale de transactions frauduleuses
+    provenant du même compte.
+
+    Parameters
+    ----------
+    sender_id : str
+        Compte fraudeur.
+
+    burst_size : int
+        Nombre de transactions à envoyer.
+    """
+
+    print(f"\n Début d'un burst frauduleux pour {sender_id}")
+
+    for i in range(burst_size):
+
+        tx = generate_transaction(fraud=True)
+
+        # On force l'expéditeur à rester le même
+        tx["sender_id"] = sender_id
+
+        send_transaction(tx)
+
+        print(
+            f"   [{i+1}/{burst_size}] "
+            f"{sender_id} -> "
+            f"{tx['receiver_id']} | "
+            f"{tx['amount_fcfa']} FCFA"
+        )
+
+        # 50 ms entre deux transactions
+        time.sleep(0.05)
+
+    print(f" Burst terminé pour {sender_id}\n")
