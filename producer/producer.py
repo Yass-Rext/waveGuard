@@ -89,3 +89,64 @@ LOCATIONS = [
     "Kaolack",
     "Ziguinchor"
 ]
+
+
+# ==========================================================
+# Génération d'une transaction Mobile Money
+# ==========================================================
+
+def generate_transaction(fraud: bool = False):
+    """
+    Génère une transaction Mobile Money.
+
+    Parameters
+    ----------
+    fraud : bool
+        True si la transaction provient d'un compte fraudeur.
+
+    Returns
+    -------
+    dict
+        Transaction au format JSON.
+    """
+
+    # Choix de l'expéditeur
+    sender = random.choice(FRAUD_ACCOUNTS if fraud else ACCOUNTS)
+
+    # Le destinataire doit être différent de l'expéditeur
+    receiver = random.choice(
+        [acc for acc in ACCOUNTS if acc != sender]
+    )
+
+    # Montant
+    if fraud:
+        amount = random.randint(800_000, 2_000_000)
+    else:
+        amount = random.randint(500, 150_000)
+
+    transaction = {
+
+        "transaction_id": str(uuid.uuid4()),
+
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat(),
+
+        "sender_id": sender,
+
+        "receiver_id": receiver,
+
+        "amount_fcfa": amount,
+
+        "transaction_type": random.choice(
+            TRANSACTION_TYPES
+        ),
+
+        "location": random.choice(
+            LOCATIONS
+        ),
+
+        "is_flagged": fraud
+    }
+
+    return transaction
