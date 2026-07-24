@@ -173,3 +173,26 @@ def delivery_report(err, msg):
         f"Offset={msg.offset()} | "
         f"Key={msg.key().decode('utf-8')}"
     )
+
+
+# ==========================================================
+# Envoi d'une transaction vers Kafka
+# ==========================================================
+
+def send_transaction(transaction: dict):
+    """
+    Envoie une transaction vers Kafka.
+    """
+
+    producer.produce(
+        topic=TOPIC,
+
+        key=transaction["sender_id"],
+
+        value=json.dumps(transaction).encode("utf-8"),
+
+        callback=delivery_report,
+    )
+
+    # Déclenche les callbacks sans bloquer
+    producer.poll(0)
