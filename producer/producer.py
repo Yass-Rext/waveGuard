@@ -341,3 +341,7 @@ def main():
         producer.flush()
 
         logger.info("Producteur arrêté.")
+
+
+if __name__ == "__main__":
+    main()

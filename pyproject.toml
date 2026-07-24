@@ -1,0 +1,10 @@
+[project]
+name = "waveguard"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "confluent-kafka>=2.15.0",
+    "faker>=40.35.0",
+]
