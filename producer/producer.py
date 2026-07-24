@@ -15,6 +15,21 @@ from datetime import datetime, timezone
 
 from confluent_kafka import Producer
 from faker import Faker
+import logging
+
+
+# ==========================================================
+# Configuration du logger
+# ==========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+logger = logging.getLogger("WaveGuardProducer")
+
 
 # ==========================================================
 # Paramètres de la simulation
@@ -191,16 +206,15 @@ def delivery_report(err, msg):
     """
 
     if err is not None:
-        print(f"[ERREUR] Livraison échouée : {err}")
+        logger.error(f"Livraison échouée : {err}")
         return
 
-    print(
-        f"[OK] "
-        f"Topic={msg.topic()} | "
-        f"Partition={msg.partition()} | "
-        f"Offset={msg.offset()} | "
-        f"Key={msg.key().decode('utf-8')}"
-    )
+    logger.info(
+    f"Transaction envoyée | "
+    f"Topic={msg.topic()} | "
+    f"Partition={msg.partition()} | "
+    f"Offset={msg.offset()} | "
+    f"Sender={msg.key().decode('utf-8')}")
 
 
 # ==========================================================
@@ -244,7 +258,8 @@ def send_fraud_burst(sender_id: str, burst_size: int = BURST_SIZE):
         Nombre de transactions à envoyer.
     """
 
-    print(f"\n Début d'un burst frauduleux pour {sender_id}")
+    logger.warning(
+    f"Début d'un burst frauduleux pour {sender_id}")
 
     for i in range(burst_size):
 
@@ -255,17 +270,15 @@ def send_fraud_burst(sender_id: str, burst_size: int = BURST_SIZE):
 
         send_transaction(tx)
 
-        print(
-            f"   [{i+1}/{burst_size}] "
-            f"{sender_id} -> "
-            f"{tx['receiver_id']} | "
-            f"{tx['amount_fcfa']} FCFA"
+        logger.info(f"Burst {i+1}/{burst_size} | "f"Sender={sender_id} | "
+            f"Receiver={tx['receiver_id']} | "
+            f"Amount={tx['amount_fcfa']} FCFA"
         )
 
         # 50 ms entre deux transactions
         time.sleep(BURST_TRANSACTION_DELAY)
 
-    print(f" Burst terminé pour {sender_id}\n")
+    logger.warning(f"Burst terminé pour {sender_id}")
 
 
 
@@ -278,12 +291,12 @@ def main():
     Lance la simulation des transactions Mobile Money.
     """
 
-    print("=" * 60)
-    print("WaveGuard - Producteur Kafka")
-    print("=" * 60)
-    print(f"Broker : {BROKER}")
-    print(f"Topic  : {TOPIC}")
-    print("Simulation démarrée...\n")
+    logger.info("=" * 60)
+    logger.info("WaveGuard - Producteur Kafka")
+    logger.info("=" * 60)
+    logger.info(f"Broker : {BROKER}")
+    logger.info(f"Topic : {TOPIC}")
+    logger.info("Simulation démarrée...")
 
     try:
 
@@ -296,11 +309,11 @@ def main():
 
             send_transaction(transaction)
 
-            print(
-                f"[NORMAL] "
-                f"{transaction['sender_id']} -> "
-                f"{transaction['receiver_id']} | "
-                f"{transaction['amount_fcfa']} FCFA"
+            logger.info(
+                f"Transaction normale | "
+                f"Sender={transaction['sender_id']} | "
+                f"Receiver={transaction['receiver_id']} | "
+                f"Amount={transaction['amount_fcfa']} FCFA"
             )
 
             # ----------------------------
@@ -323,8 +336,12 @@ def main():
 
     finally:
 
-        print("Vidage du buffer Kafka...")
+        logger.info("Vidage du buffer Kafka...")
 
         producer.flush()
 
-        print("Producteur arrêté.")
+        logger.info("Producteur arrêté.")
+
+
+if __name__ == "__main__":
+    main()
