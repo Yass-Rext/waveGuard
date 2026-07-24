@@ -16,6 +16,34 @@ from datetime import datetime, timezone
 from confluent_kafka import Producer
 from faker import Faker
 
+# ==========================================================
+# Paramètres de la simulation
+# ==========================================================
+
+# Nombre total de comptes simulés
+NUMBER_OF_ACCOUNTS = 50
+
+# Taille d'une rafale frauduleuse
+BURST_SIZE = 8
+
+# Probabilité qu'une fraude soit déclenchée
+FRAUD_PROBABILITY = 0.05
+
+# Temps entre deux transactions normales (secondes)
+NORMAL_TRANSACTION_DELAY = 0.5
+
+# Temps entre deux transactions d'une rafale (secondes)
+BURST_TRANSACTION_DELAY = 0.05
+
+# Montants des transactions normales
+MIN_NORMAL_AMOUNT = 500
+MAX_NORMAL_AMOUNT = 150_000
+
+# Montants des transactions frauduleuses
+MIN_FRAUD_AMOUNT = 800_000
+MAX_FRAUD_AMOUNT = 2_000_000
+
+
 
 # ==========================
 # Initialisation de Faker
@@ -67,7 +95,7 @@ producer = Producer(producer_config)
 
 ACCOUNTS = [
     f"SN_{i:04d}"
-    for i in range(1, 51)
+    for i in range(1, NUMBER_OF_ACCOUNTS + 1)
 ]
 
 FRAUD_ACCOUNTS = [
@@ -120,9 +148,9 @@ def generate_transaction(fraud: bool = False):
 
     # Montant
     if fraud:
-        amount = random.randint(800_000, 2_000_000)
+        amount = random.randint(MIN_FRAUD_AMOUNT, MAX_FRAUD_AMOUNT)
     else:
-        amount = random.randint(500, 150_000)
+        amount = random.randint(MIN_NORMAL_AMOUNT, MAX_NORMAL_AMOUNT)
 
     transaction = {
 
@@ -202,7 +230,7 @@ def send_transaction(transaction: dict):
 # Simulation d'une attaque par vélocité
 # ==========================================================
 
-def send_fraud_burst(sender_id: str, burst_size: int = 8):
+def send_fraud_burst(sender_id: str, burst_size: int = BURST_SIZE):
     """
     Envoie une rafale de transactions frauduleuses
     provenant du même compte.
@@ -235,7 +263,7 @@ def send_fraud_burst(sender_id: str, burst_size: int = 8):
         )
 
         # 50 ms entre deux transactions
-        time.sleep(0.05)
+        time.sleep(BURST_TRANSACTION_DELAY)
 
     print(f" Burst terminé pour {sender_id}\n")
 
@@ -278,7 +306,7 @@ def main():
             # ----------------------------
             # Déclenchement aléatoire d'une fraude
             # ----------------------------
-            if random.random() < 0.05:
+            if random.random() < FRAUD_PROBABILITY:
 
                 fraud_sender = random.choice(FRAUD_ACCOUNTS)
 
@@ -287,7 +315,7 @@ def main():
             # ----------------------------
             # Pause entre deux transactions normales
             # ----------------------------
-            time.sleep(0.5)
+            time.sleep(NORMAL_TRANSACTION_DELAY)
 
     except KeyboardInterrupt:
 
