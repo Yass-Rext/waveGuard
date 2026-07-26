@@ -85,8 +85,8 @@ services:
 
 
   #####################################################################
-  # SPARK + JUPYTER
-  #####################################################################
+# SPARK + JUPYTER
+#####################################################################
   spark:
     image: jupyter/pyspark-notebook:latest
 
@@ -106,22 +106,20 @@ services:
       JUPYTER_ENABLE_LAB: "yes"
       JUPYTER_TOKEN: password
 
+      # Chargement automatique du connecteur Kafka
+      PYSPARK_SUBMIT_ARGS: >
+        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
+        pyspark-shell
+
     working_dir: /home/jovyan/work
 
     volumes:
-
       - ./work:/home/jovyan/work
-
-      - ./checkpoints:/home/jovyan/checkpoints
-
-      - ./data:/home/jovyan/data
-
-      - ./monitoring:/home/jovyan/monitoring
-
-      - ./producer:/home/jovyan/producer
-
       - ./spark:/home/jovyan/spark
-
+      - ./producer:/home/jovyan/producer
+      - ./monitoring:/home/jovyan/monitoring
+      - ./data:/home/jovyan/data
+      - ./checkpoints:/home/jovyan/checkpoints
       - ./requirements.txt:/tmp/requirements.txt
 
     command: >
@@ -132,7 +130,6 @@ services:
 
     networks:
       - waveguard
-
 
   #####################################################################
   # AIRFLOW
