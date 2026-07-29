@@ -37,7 +37,6 @@ spark = (
     .appName(APP_NAME)
     .getOrCreate()
 )
-
 spark.sparkContext.setLogLevel("WARN")
 
 
@@ -86,3 +85,14 @@ transactions = (
     )
     .select("transaction.*")
 )
+
+
+query = (
+    transactions.writeStream
+    .format("console")
+    .outputMode("append")
+    .option("truncate", False)
+    .start()
+)
+
+query.awaitTermination()
