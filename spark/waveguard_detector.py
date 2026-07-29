@@ -1,7 +1,9 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col,
+  col,
     from_json,
+    when,
+    lit
 )
 from pyspark.sql.types import (
     StructType,
@@ -86,6 +88,53 @@ transactions = (
     .select("transaction.*")
 )
 
+
+# ==========================================================
+# Calcul du score de risque
+# ==========================================================
+
+transactions = (
+    transactions
+
+    # Règle 1
+    .withColumn(
+        "score_amount",
+        when(col("amount_fcfa") > 500000, 1).otherwise(0)
+    )
+
+    # Règle 2
+    .withColumn(
+        "score_flagged",
+        when(col("is_flagged") == True, 2).otherwise(0)
+    )
+
+    # Règle 3
+    .withColumn(
+        "score_type",
+        when(col("transaction_type") == "international", 1).otherwise(0)
+    )
+
+    # Règle 4
+    .withColumn(
+        "score_location",
+        when(col("location") != "Dakar", 1).otherwise(0)
+    )
+)
+
+transactions = transactions.withColumn(
+    "fraud_score",
+    col("score_amount")
+    + col("score_flagged")
+    + col("score_type")
+    + col("score_location")
+)
+
+transactions = transactions.withColumn(
+    "risk_level",
+    when(col("fraud_score") >= 3, "HIGH")
+    .when(col("fraud_score") >= 1, "MEDIUM")
+    .otherwise("LOW")
+)
 
 query = (
     transactions.writeStream
