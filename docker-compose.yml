@@ -88,7 +88,9 @@ services:
 # SPARK + JUPYTER
 #####################################################################
   spark:
-    image: jupyter/pyspark-notebook:latest
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
 
     container_name: spark
 
@@ -98,39 +100,20 @@ services:
       - kafka
       - minio
 
-    ports:
-      - "8888:8888"
-      - "4040:4040"
-
-    environment:
-      JUPYTER_ENABLE_LAB: "yes"
-      JUPYTER_TOKEN: password
-
-      # Chargement automatique du connecteur Kafka
-      PYSPARK_SUBMIT_ARGS: >
-        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
-        pyspark-shell
-
-    working_dir: /home/jovyan/work
+    working_dir: /opt/spark/work-dir
 
     volumes:
-      - ./work:/home/jovyan/work
-      - ./spark:/home/jovyan/spark
-      - ./producer:/home/jovyan/producer
-      - ./monitoring:/home/jovyan/monitoring
-      - ./data:/home/jovyan/data
-      - ./checkpoints:/home/jovyan/checkpoints
-      - ./requirements.txt:/tmp/requirements.txt
+      - ./spark:/opt/spark/work-dir
+      - ./producer:/opt/spark/producer
+      - ./data:/opt/spark/data
+      - ./checkpoints:/opt/spark/checkpoints
+      - ./monitoring:/opt/spark/monitoring
 
-    command: >
-      bash -c "
-      pip install --quiet -r /tmp/requirements.txt &&
-      start-notebook.sh
-      "
+    ports:
+      - "4040:4040"
 
     networks:
       - waveguard
-
   #####################################################################
   # AIRFLOW
   #####################################################################
