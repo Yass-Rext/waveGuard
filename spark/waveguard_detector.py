@@ -37,6 +37,13 @@ OUTPUT_DIR = "/home/jovyan/data"
 spark = (
     SparkSession.builder
     .appName(APP_NAME)
+
+    # MinIO
+    .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
+    .config("spark.hadoop.fs.s3a.access.key", "admin")
+    .config("spark.hadoop.fs.s3a.secret.key", "password123")
+    .config("spark.hadoop.fs.s3a.path.style.access", "true")
+    .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
     .getOrCreate()
 )
 spark.sparkContext.setLogLevel("WARN")
@@ -134,6 +141,44 @@ transactions = transactions.withColumn(
     when(col("fraud_score") >= 3, "HIGH")
     .when(col("fraud_score") >= 1, "MEDIUM")
     .otherwise("LOW")
+)
+
+normal_transactions = transactions.filter(
+    col("risk_level") == "LOW"
+)
+
+fraud_transactions = transactions.filter(
+    col("risk_level") == "HIGH"
+)
+
+normal_query = (
+    normal_transactions.writeStream
+    .format("parquet")
+    .option(
+        "path",
+        "s3a://waveguard/normal"
+    )
+    .option(
+        "checkpointLocation",
+        "/home/jovyan/checkpoints/normal"
+    )
+    .outputMode("append")
+    .start()
+)
+
+fraud_query = (
+    fraud_transactions.writeStream
+    .format("parquet")
+    .option(
+        "path",
+        "s3a://waveguard/fraud"
+    )
+    .option(
+        "checkpointLocation",
+        "/home/jovyan/checkpoints/fraud"
+    )
+    .outputMode("append")
+    .start()
 )
 
 query = (
