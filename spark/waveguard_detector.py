@@ -1,87 +1,64 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-  col,
-    from_json,
-    when,
-    lit
+from pyspark.sql.functions import col, from_json
+
+from config import *
+from schemas import transaction_schema
+from rule_engine import apply_rules
+from storage import (
+    write_normal_transactions,
+    write_fraud_transactions,
+    write_audit_logs,
 )
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    DoubleType,
-    BooleanType,
-    TimestampType,
+from utils import (
+    fraud_transactions,
+    normal_transactions,
 )
 
+from kafka_writer import (
+    write_fraud_topic,
+    write_audit_topic,
+)
 
-# ==========================================================
-# Configuration
-# ==========================================================
-
-APP_NAME = "WaveGuardDetector"
-
-KAFKA_BOOTSTRAP_SERVERS = "kafka:29092"
-
-INPUT_TOPIC = "transactions"
-
-CHECKPOINT_DIR = "/home/jovyan/checkpoints"
-
-OUTPUT_DIR = "/home/jovyan/data"
-
-
-# ==========================================================
-# Spark Session
-# ==========================================================
+# =====================================================
+# Spark
+# =====================================================
 
 spark = (
     SparkSession.builder
     .appName(APP_NAME)
 
-    # MinIO
-    .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
-    .config("spark.hadoop.fs.s3a.access.key", "admin")
-    .config("spark.hadoop.fs.s3a.secret.key", "password123")
+    .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
+    .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY)
+    .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
     .config("spark.hadoop.fs.s3a.path.style.access", "true")
     .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+
     .getOrCreate()
 )
+
 spark.sparkContext.setLogLevel("WARN")
 
-
-# ==========================================================
-# Schéma des transactions
-# ==========================================================
-
-transaction_schema = StructType([
-    StructField("transaction_id", StringType(), False),
-    StructField("timestamp", StringType(), False),
-    StructField("sender_id", StringType(), False),
-    StructField("receiver_id", StringType(), False),
-    StructField("amount_fcfa", DoubleType(), False),
-    StructField("transaction_type", StringType(), False),
-    StructField("location", StringType(), False),
-    StructField("is_flagged", BooleanType(), False),
-])
-
-
-# ==========================================================
-# Lecture du topic Kafka
-# ==========================================================
+# =====================================================
+# Lecture Kafka
+# =====================================================
 
 raw_transactions = (
     spark.readStream
     .format("kafka")
-    .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
-    .option("subscribe", INPUT_TOPIC)
-    .option("startingOffsets", "latest")
+    .option(
+        "kafka.bootstrap.servers",
+        KAFKA_BOOTSTRAP_SERVERS
+    )
+    .option(
+        "subscribe",
+        TRANSACTIONS_TOPIC
+    )
+    .option(
+        "startingOffsets",
+        "latest"
+    )
     .load()
 )
-
-
-# ==========================================================
-# Parsing des transactions
-# ==========================================================
 
 transactions = (
     raw_transactions
@@ -93,100 +70,52 @@ transactions = (
         ).alias("transaction")
     )
     .select("transaction.*")
+    # 1. Convertir la colonne timestamp en vrai type Timestamp PySpark
+    .withColumn("timestamp", col("timestamp").cast("timestamp"))
+    # 2. Définir le Watermark (ex: 10 minutes de retard toléré)
+    .withWatermark("timestamp", "10 minutes")
 )
 
+# =====================================================
+# Application des règles
+# =====================================================
 
-# ==========================================================
-# Calcul du score de risque
-# ==========================================================
+transactions = apply_rules(transactions)
 
-transactions = (
-    transactions
+# =====================================================
+# Séparation
+# =====================================================
 
-    # Règle 1
-    .withColumn(
-        "score_amount",
-        when(col("amount_fcfa") > 500000, 1).otherwise(0)
-    )
+normal_df = normal_transactions(transactions)
 
-    # Règle 2
-    .withColumn(
-        "score_flagged",
-        when(col("is_flagged") == True, 2).otherwise(0)
-    )
+fraud_df = fraud_transactions(transactions)
 
-    # Règle 3
-    .withColumn(
-        "score_type",
-        when(col("transaction_type") == "international", 1).otherwise(0)
-    )
+audit_df = transactions
 
-    # Règle 4
-    .withColumn(
-        "score_location",
-        when(col("location") != "Dakar", 1).otherwise(0)
-    )
-)
+fraud_topic_query = write_fraud_topic(fraud_df)
 
-transactions = transactions.withColumn(
-    "fraud_score",
-    col("score_amount")
-    + col("score_flagged")
-    + col("score_type")
-    + col("score_location")
-)
+audit_topic_query = write_audit_topic(audit_df)
 
-transactions = transactions.withColumn(
-    "risk_level",
-    when(col("fraud_score") >= 3, "HIGH")
-    .when(col("fraud_score") >= 1, "MEDIUM")
-    .otherwise("LOW")
-)
+# =====================================================
+# Sauvegarde MinIO
+# =====================================================
 
-normal_transactions = transactions.filter(
-    col("risk_level") == "LOW"
-)
+normal_query = write_normal_transactions(normal_df)
 
-fraud_transactions = transactions.filter(
-    col("risk_level") == "HIGH"
-)
+fraud_query = write_fraud_transactions(fraud_df)
 
-normal_query = (
-    normal_transactions.writeStream
-    .format("parquet")
-    .option(
-        "path",
-        "s3a://waveguard/normal"
-    )
-    .option(
-        "checkpointLocation",
-        "/home/jovyan/checkpoints/normal"
-    )
-    .outputMode("append")
-    .start()
-)
+audit_query = write_audit_logs(audit_df)
 
-fraud_query = (
-    fraud_transactions.writeStream
-    .format("parquet")
-    .option(
-        "path",
-        "s3a://waveguard/fraud"
-    )
-    .option(
-        "checkpointLocation",
-        "/home/jovyan/checkpoints/fraud"
-    )
-    .outputMode("append")
-    .start()
-)
+# =====================================================
+# Console
+# =====================================================
 
-query = (
+console_query = (
     transactions.writeStream
     .format("console")
-    .outputMode("append")
     .option("truncate", False)
+    .outputMode("append")
     .start()
 )
 
-query.awaitTermination()
+console_query.awaitTermination()
