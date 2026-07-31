@@ -34,6 +34,7 @@ logger = logging.getLogger("WaveGuardProducer")
 # ==========================================================
 # Paramètres de la simulation
 # ==========================================================
+# message_counter = 0
 
 # Nombre total de comptes simulés
 NUMBER_OF_ACCOUNTS = 50
@@ -308,6 +309,9 @@ def main():
             transaction = generate_transaction()
 
             send_transaction(transaction)
+            # message_counter += 1
+            # if message_counter % 100 == 0:
+            #     logger.info(f"📊 {message_counter} transactions envoyées depuis le démarrage.")
 
             logger.info(
                 f"Transaction normale | "
