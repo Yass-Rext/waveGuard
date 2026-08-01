@@ -1,0 +1,46 @@
+# monitoring/alerts/alert_rules.yml
+apiVersion: 1
+
+groups:
+  - name: WaveGuard Alerts
+    interval: 1m
+    rules:
+      - alert: HighFraudRate
+        expr: derived.alert_rate > 10
+        for: 5m
+        annotations:
+          summary: "Taux de fraude élevé détecté"
+          description: "Le taux de fraude a dépassé 10% pendant 5 minutes (actuel: {{ $value }}%)"
+        labels:
+          severity: warning
+          component: waveguard
+
+      - alert: ManyFraudAlerts
+        expr: fraud.total_alerts > 20
+        for: 5m
+        annotations:
+          summary: "Nombre d'alertes de fraude élevé"
+          description: "Plus de 20 alertes de fraude détectées en 5 minutes (total: {{ $value }})"
+        labels:
+          severity: critical
+          component: waveguard
+
+      - alert: LowTransactionVolume
+        expr: transactions.total_transactions < 10
+        for: 10m
+        annotations:
+          summary: "Volume de transactions anormalement bas"
+          description: "Moins de 10 transactions en 10 minutes ({{ $value }})"
+        labels:
+          severity: info
+          component: waveguard
+
+      - alert: ZeroAlerts
+        expr: fraud.total_alerts == 0
+        for: 5m
+        annotations:
+          summary: "Aucune alerte de fraude"
+          description: "Aucune alerte détectée depuis 5 minutes - Vérifiez le pipeline"
+        labels:
+          severity: info
+          component: waveguard

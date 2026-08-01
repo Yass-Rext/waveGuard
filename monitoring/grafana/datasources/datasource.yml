@@ -1,0 +1,20 @@
+# monitoring/grafana/datasources/datasource.yml
+apiVersion: 1
+
+datasources:
+  - name: WaveGuard Metrics (Infinity)
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    url: http://localhost:3000
+    isDefault: true
+    version: 1
+    editable: true
+    jsonData:
+      global_queries: []
+      allowed_hosts: []
+      oauth2_settings:
+        type: None
+      auth_method: None
+      custom_http_headers:
+        - name: "Cache-Control"
+          value: "no-cache"
