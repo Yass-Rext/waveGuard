@@ -209,3 +209,110 @@ def get_recent_activity(spark):
     except Exception as e:
         print(f"❌ Erreur lors de la récupération des alertes récentes : {e}")
         return []
+
+
+# ============================================================
+# MÉTRIQUES PRINCIPALES
+# ============================================================
+
+def collect_all_metrics(spark):
+    """
+    Collecte toutes les métriques et les retourne sous forme de dictionnaire.
+    """
+    # Métriques de fraude
+    fraud_metrics = get_fraud_metrics(spark)
+    
+    # Métriques de transactions
+    tx_metrics = get_transaction_metrics(spark)
+    
+    # Métriques dérivées
+    derived_metrics = get_alert_rate_metrics(fraud_metrics, tx_metrics)
+    
+    # Alertes récentes
+    recent_alerts = get_recent_activity(spark)
+    
+    # Métriques de performance (à ajouter selon vos besoins)
+    performance_metrics = {
+        "last_update": datetime.now().isoformat(),
+        "uptime_seconds": int(time.time() - start_time) if 'start_time' in globals() else 0
+    }
+    
+    return {
+        "timestamp": time.time(),
+        "datetime": datetime.now().isoformat(),
+        "fraud": fraud_metrics,
+        "transactions": tx_metrics,
+        "derived": derived_metrics,
+        "recent_alerts": recent_alerts,
+        "performance": performance_metrics
+    }
+
+
+def save_metrics(metrics, filepath=METRICS_FILE):
+    """
+    Sauvegarde les métriques au format JSON pour Grafana.
+    """
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(metrics, f, indent=2, default=str)
+        print(f"✅ Métriques sauvegardées dans {filepath}")
+        print(f"   📊 Alertes: {metrics['fraud']['total_alerts']}")
+        print(f"   📈 Transactions: {metrics['transactions']['total_transactions']}")
+        print(f"   ⚠️  Taux d'alerte: {metrics['derived']['alert_rate']}%")
+        return True
+    except Exception as e:
+        print(f"❌ Erreur lors de la sauvegarde : {e}")
+        return False
+
+# ============================================================
+# BOUCLE PRINCIPALE
+# ============================================================
+
+def main():
+    """
+    Boucle principale d'exportation des métriques.
+    """
+    global start_time
+    start_time = time.time()
+    
+    print("=" * 60)
+    print("📊 WAVEGUARD - EXPORTATEUR DE MÉTRIQUES")
+    print("=" * 60)
+    print(f"📁 Fichier de sortie : {METRICS_FILE}")
+    print(f"🔄 Intervalle : {REFRESH_INTERVAL} secondes")
+    print(f"💾 Source : {MINIO_BUCKET}")
+    print("=" * 60)
+    
+    # Créer la session Spark
+    spark = create_spark_session()
+    spark.sparkContext.setLogLevel("WARN")
+    
+    print("✅ Session Spark créée")
+    
+    # Créer le dossier parent si nécessaire
+    os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
+    
+    try:
+        while True:
+            print(f"\n🔄 Collecte des métriques...")
+            
+            # Collecter toutes les métriques
+            metrics = collect_all_metrics(spark)
+            
+            # Sauvegarder
+            save_metrics(metrics)
+            
+            # Attendre le prochain cycle
+            time.sleep(REFRESH_INTERVAL)
+            
+    except KeyboardInterrupt:
+        print("\n🛑 Arrêt demandé par l'utilisateur")
+    except Exception as e:
+        print(f"❌ Erreur fatale : {e}")
+    finally:
+        spark.stop()
+        print("✅ Exportateur arrêté")
+
+
+if __name__ == "__main__":
+    main()
