@@ -1,0 +1,140 @@
+{
+  "title": "WaveGuard - Détection de Fraude",
+  "uid": "waveguard-dashboard",
+  "editable": true,
+  "style": "dark",
+  "timezone": "UTC",
+  "panels": [
+    {
+      "title": "📊 Alertes de Fraude (Total)",
+      "type": "stat",
+      "targets": [
+        {
+          "query": "fraud.total_alerts",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 50},
+              {"color": "red", "value": 100}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "📈 Transactions Normales (Total)",
+      "type": "stat",
+      "targets": [
+        {
+          "query": "transactions.total_transactions",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "⚠️ Taux d'Alerte (%)",
+      "type": "gauge",
+      "targets": [
+        {
+          "query": "derived.alert_rate",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 15}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "🏆 Top Fraudeurs",
+      "type": "table",
+      "targets": [
+        {
+          "query": "fraud.top_fraudsters",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "sortBy": [
+          {
+            "displayName": "Alertes",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "title": "📊 Alertes par Type",
+      "type": "piechart",
+      "targets": [
+        {
+          "query": "fraud.by_type",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "📊 Transactions par Type",
+      "type": "piechart",
+      "targets": [
+        {
+          "query": "transactions.by_type",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "📋 Dernières Alertes",
+      "type": "table",
+      "targets": [
+        {
+          "query": "recent_alerts",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "💰 Montant Total Frauduleux (FCFA)",
+      "type": "stat",
+      "targets": [
+        {
+          "query": "fraud.total_amount",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyFCFA"
+        }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  }
+}
