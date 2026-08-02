@@ -1,46 +1,33 @@
 #!/usr/bin/env python3
 # monitoring/metrics_exporter.py
-"""
-Exportateur de métriques pour WaveGuard.
-Lit les données depuis MinIO et les expose sous forme de JSON pour Grafana.
-"""
 
 import time
 import json
 import os
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, count, sum as spark_sum
+from pyspark.sql.functions import col, count, sum as spark_sum, avg as spark_avg
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-# Où écrire les métriques pour Grafana
-METRICS_FILE = "/tmp/waveguard_metrics.json"
-
-# Chemins MinIO (doivent correspondre à config.py)
+METRICS_FILE = "/tmp/metrics/waveguard_metrics.json"
 MINIO_BUCKET = "s3a://waveguard"
 NORMAL_PATH = f"{MINIO_BUCKET}/normal"
 FRAUD_PATH = f"{MINIO_BUCKET}/fraud"
 
-# Configuration MinIO
 MINIO_ENDPOINT = "http://minio:9000"
 MINIO_ACCESS_KEY = "admin"
 MINIO_SECRET_KEY = "password123"
 
-# Intervalle de rafraîchissement (secondes)
 REFRESH_INTERVAL = 30
-
 
 # ============================================================
 # SPARK SESSION
 # ============================================================
 
 def create_spark_session():
-    """
-    Crée une session Spark pour lire les données Parquet dans MinIO.
-    """
     return (
         SparkSession.builder
         .appName("WaveGuard_MetricsExporter")
@@ -60,12 +47,18 @@ def create_spark_session():
 # FONCTIONS DE MÉTRIQUES
 # ============================================================
 
+def safe_format_timestamp(ts):
+    """Convertit un timestamp en chaîne ISO, quel que soit son type."""
+    if ts is None:
+        return None
+    if hasattr(ts, 'isoformat'):
+        return ts.isoformat()
+    if isinstance(ts, str):
+        return ts
+    return str(ts)
+
 def get_fraud_metrics(spark):
-    """
-    Calcule les métriques de fraude à partir des alertes stockées.
-    """
     try:
-        # Lire les alertes de fraude
         df_fraud = spark.read.parquet(FRAUD_PATH)
         
         if df_fraud.count() == 0:
@@ -73,21 +66,21 @@ def get_fraud_metrics(spark):
                 "total_alerts": 0,
                 "by_type": {},
                 "top_fraudsters": [],
-                "total_amount": 0
+                "total_amount": 0,
+                "avg_fraud_score": 0
             }
         
-        # Nombre total d'alertes
         total_alerts = df_fraud.count()
         
-        # Alertes par type (VELOCITY_FRAUD, VOLUME_FRAUD)
-        by_type = (
-            df_fraud.groupBy("fraud_type")
-            .count()
-            .collect()
-        )
-        fraud_by_type = {row["fraud_type"]: row["count"] for row in by_type}
+        # Alertes par type
+        if "score_type" in df_fraud.columns:
+            by_type = df_fraud.groupBy("score_type").count().collect()
+            fraud_by_type = {row["score_type"]: row["count"] for row in by_type}
+        else:
+            by_type = df_fraud.groupBy("risk_level").count().collect()
+            fraud_by_type = {row["risk_level"]: row["count"] for row in by_type}
         
-        # Top 5 fraudeurs (par nombre d'alertes)
+        # Top 5 fraudeurs
         top_fraudsters = (
             df_fraud.groupBy("sender_id")
             .count()
@@ -100,26 +93,34 @@ def get_fraud_metrics(spark):
             for row in top_fraudsters
         ]
         
-        # Montant total frauduleux (pour les alertes VOLUME)
-        total_amount = df_fraud.select(spark_sum("total_amount")).collect()[0][0] or 0
+        # Montant total
+        total_amount = df_fraud.select(spark_sum("amount_fcfa")).collect()[0][0] or 0
+        
+        # Score moyen
+        avg_score = 0
+        if "fraud_score" in df_fraud.columns:
+            avg_score = df_fraud.select(spark_avg("fraud_score")).collect()[0][0] or 0
         
         return {
             "total_alerts": total_alerts,
             "by_type": fraud_by_type,
             "top_fraudsters": top_list,
-            "total_amount": total_amount
+            "total_amount": total_amount,
+            "avg_fraud_score": avg_score
         }
         
     except Exception as e:
         print(f"❌ Erreur lors de la lecture des fraudes : {e}")
-        return {"total_alerts": 0, "by_type": {}, "top_fraudsters": [], "total_amount": 0}
-
+        return {
+            "total_alerts": 0, 
+            "by_type": {}, 
+            "top_fraudsters": [], 
+            "total_amount": 0,
+            "avg_fraud_score": 0
+        }
 
 
 def get_transaction_metrics(spark):
-    """
-    Calcule les métriques des transactions normales.
-    """
     try:
         df_normal = spark.read.parquet(NORMAL_PATH)
         
@@ -128,80 +129,62 @@ def get_transaction_metrics(spark):
                 "total_transactions": 0,
                 "average_amount": 0,
                 "total_amount": 0,
-                "by_type": {}
+                "by_type": {},
+                "by_location": {}
             }
         
-        # Statistiques de base
         total = df_normal.count()
         total_amount = df_normal.select(spark_sum("amount_fcfa")).collect()[0][0] or 0
         avg_amount = total_amount / total if total > 0 else 0
         
-        # Transactions par type (P2P, RETRAIT, etc.)
-        by_type = (
-            df_normal.groupBy("transaction_type")
-            .count()
-            .collect()
-        )
+        by_type = df_normal.groupBy("transaction_type").count().collect()
         tx_by_type = {row["transaction_type"]: row["count"] for row in by_type}
+        
+        by_location = df_normal.groupBy("location").count().collect()
+        tx_by_location = {row["location"]: row["count"] for row in by_location}
         
         return {
             "total_transactions": total,
             "average_amount": avg_amount,
             "total_amount": total_amount,
-            "by_type": tx_by_type
+            "by_type": tx_by_type,
+            "by_location": tx_by_location
         }
         
     except Exception as e:
         print(f"❌ Erreur lors de la lecture des transactions : {e}")
-        return {"total_transactions": 0, "average_amount": 0, "total_amount": 0, "by_type": {}}
-
-
-def get_alert_rate_metrics(fraud_metrics, tx_metrics):
-    """
-    Calcule le taux d'alerte et d'autres métriques dérivées.
-    """
-    total_tx = tx_metrics["total_transactions"]
-    total_alerts = fraud_metrics["total_alerts"]
-    
-    # Taux d'alertes (pourcentage)
-    alert_rate = (total_alerts / (total_tx + total_alerts) * 100) if (total_tx + total_alerts) > 0 else 0
-    
-    # Alertes par minute (estimation basée sur le temps de vie du pipeline)
-    # On pourrait ajouter un timestamp pour calculer le débit
-    
-    return {
-        "alert_rate": round(alert_rate, 2),
-        "alerts_per_transaction": round(total_alerts / total_tx, 4) if total_tx > 0 else 0,
-        "risk_score": min(100, int(alert_rate * 5))  # Score de risque simplifié
-    }
+        return {
+            "total_transactions": 0, 
+            "average_amount": 0, 
+            "total_amount": 0, 
+            "by_type": {},
+            "by_location": {}
+        }
 
 
 def get_recent_activity(spark):
-    """
-    Récupère les 5 dernières alertes pour affichage en temps réel.
-    """
     try:
         df_fraud = spark.read.parquet(FRAUD_PATH)
         
         if df_fraud.count() == 0:
             return []
         
-        # Trier par timestamp décroissant et prendre les 5 dernières
         recent = (
             df_fraud
-            .orderBy(col("detected_at").desc())
+            .orderBy(col("timestamp").desc())
             .limit(5)
-            .select("sender_id", "fraud_type", "detected_at", "window_start", "window_end")
+            .select("sender_id", "amount_fcfa", "transaction_type", "timestamp", "location", "risk_level")
             .collect()
         )
         
         return [
             {
                 "sender": row["sender_id"],
-                "type": row["fraud_type"],
-                "detected_at": row["detected_at"].isoformat() if row["detected_at"] else None,
-                "window_start": row["window_start"].isoformat() if row["window_start"] else None,
-                "window_end": row["window_end"].isoformat() if row["window_end"] else None
+                "amount": row["amount_fcfa"],
+                "type": row["transaction_type"],
+                "timestamp": safe_format_timestamp(row["timestamp"]),
+                "location": row["location"],
+                "risk_level": row["risk_level"]
             }
             for row in recent
         ]
@@ -211,31 +194,45 @@ def get_recent_activity(spark):
         return []
 
 
+def get_risk_distribution(spark):
+    try:
+        df_fraud = spark.read.parquet(FRAUD_PATH)
+        
+        if df_fraud.count() == 0:
+            return {}
+        
+        distribution = df_fraud.groupBy("risk_level").count().collect()
+        return {row["risk_level"]: row["count"] for row in distribution}
+        
+    except Exception as e:
+        print(f"❌ Erreur lors de la distribution des risques : {e}")
+        return {}
+
+
+def get_alert_rate_metrics(fraud_metrics, tx_metrics):
+    total_tx = tx_metrics["total_transactions"]
+    total_alerts = fraud_metrics["total_alerts"]
+    
+    alert_rate = (total_alerts / (total_tx + total_alerts) * 100) if (total_tx + total_alerts) > 0 else 0
+    
+    return {
+        "alert_rate": round(alert_rate, 2),
+        "alerts_per_transaction": round(total_alerts / total_tx, 4) if total_tx > 0 else 0,
+        "risk_score": min(100, int(alert_rate * 5))
+    }
+
 # ============================================================
 # MÉTRIQUES PRINCIPALES
 # ============================================================
 
 def collect_all_metrics(spark):
-    """
-    Collecte toutes les métriques et les retourne sous forme de dictionnaire.
-    """
-    # Métriques de fraude
+    start_time_collect = time.time()
+    
     fraud_metrics = get_fraud_metrics(spark)
-    
-    # Métriques de transactions
     tx_metrics = get_transaction_metrics(spark)
-    
-    # Métriques dérivées
     derived_metrics = get_alert_rate_metrics(fraud_metrics, tx_metrics)
-    
-    # Alertes récentes
-    recent_alerts = get_recent_activity(spark)
-    
-    # Métriques de performance (à ajouter selon vos besoins)
-    performance_metrics = {
-        "last_update": datetime.now().isoformat(),
-        "uptime_seconds": int(time.time() - start_time) if 'start_time' in globals() else 0
-    }
+    recent_activity = get_recent_activity(spark)
+    risk_distribution = get_risk_distribution(spark)
     
     return {
         "timestamp": time.time(),
@@ -243,16 +240,17 @@ def collect_all_metrics(spark):
         "fraud": fraud_metrics,
         "transactions": tx_metrics,
         "derived": derived_metrics,
-        "recent_alerts": recent_alerts,
-        "performance": performance_metrics
+        "recent_alerts": recent_activity,
+        "risk_distribution": risk_distribution,
+        "performance": {
+            "collect_duration": round(time.time() - start_time_collect, 2)
+        }
     }
 
 
 def save_metrics(metrics, filepath=METRICS_FILE):
-    """
-    Sauvegarde les métriques au format JSON pour Grafana.
-    """
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, 'w') as f:
             json.dump(metrics, f, indent=2, default=str)
         print(f"✅ Métriques sauvegardées dans {filepath}")
@@ -269,12 +267,6 @@ def save_metrics(metrics, filepath=METRICS_FILE):
 # ============================================================
 
 def main():
-    """
-    Boucle principale d'exportation des métriques.
-    """
-    global start_time
-    start_time = time.time()
-    
     print("=" * 60)
     print("📊 WAVEGUARD - EXPORTATEUR DE MÉTRIQUES")
     print("=" * 60)
@@ -283,26 +275,16 @@ def main():
     print(f"💾 Source : {MINIO_BUCKET}")
     print("=" * 60)
     
-    # Créer la session Spark
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
     
     print("✅ Session Spark créée")
     
-    # Créer le dossier parent si nécessaire
-    os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
-    
     try:
         while True:
             print(f"\n🔄 Collecte des métriques...")
-            
-            # Collecter toutes les métriques
             metrics = collect_all_metrics(spark)
-            
-            # Sauvegarder
             save_metrics(metrics)
-            
-            # Attendre le prochain cycle
             time.sleep(REFRESH_INTERVAL)
             
     except KeyboardInterrupt:

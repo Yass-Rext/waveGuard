@@ -105,9 +105,9 @@ services:
     volumes:
       - ./spark:/opt/spark/work-dir
       - ./producer:/opt/spark/producer
-      - ./data:/opt/spark/data
+      - ./data/metrics:/tmp/metrics
       - ./checkpoints:/opt/spark/checkpoints
-      - ./monitoring:/opt/spark/monitoring
+      - ./monitoring:/opt/spark/work-dir/monitoring
 
     ports:
       - "4040:4040"
@@ -168,36 +168,60 @@ services:
   #####################################################################
   grafana:
     image: grafana/grafana:latest
-
     container_name: grafana
-
     restart: unless-stopped
-
     ports:
       - "3000:3000"
-
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-
-      GF_SECURITY_ADMIN_PASSWORD: admin
-
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource,grafana-piechart-panel
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_AUTH_ANONYMOUS_ENABLED=false
     volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring:/tmp/monitoring
+      - ./data/metrics:/tmp/metrics
       - grafana_data:/var/lib/grafana
-
-      - ./monitoring:/var/lib/waveguard
-
     networks:
       - waveguard
-
+    depends_on:
+      - minio
+      - kafka
+      - spark
 
 volumes:
-
   minio_data:
-
   grafana_data:
 
-
 networks:
-
   waveguard:
     driver: bridge
+
+
+# #####################################################################
+# # METRICS EXPORTER (Service de monitoring)
+# #####################################################################
+# metrics_exporter:
+#   build: ./spark  # Utilise la même image Spark
+#   container_name: metrics_exporter
+#   restart: unless-stopped
+#   command: >
+#     python3 /opt/spark/work-dir/monitoring/metrics_exporter.py
+#   volumes:
+#     - ./spark:/opt/spark/work-dir
+#     - ./monitoring:/opt/spark/work-dir/monitoring
+#     - ./checkpoints:/tmp/waveguard_checkpoints
+#   environment:
+#     - SPARK_MODE=worker
+#     - SPARK_MASTER_URL=spark://spark:7077
+#     - MINIO_ENDPOINT=http://minio:9000
+#     - MINIO_ACCESS_KEY=admin
+#     - MINIO_SECRET_KEY=password123
+#   networks:
+#     - waveguard
+#   depends_on:
+#     - spark
+#     - minio
+#     - kafka
