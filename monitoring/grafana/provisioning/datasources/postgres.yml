@@ -1,0 +1,19 @@
+# monitoring/grafana/provisioning/datasources/postgres.yml
+apiVersion: 1
+
+datasources:
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: waveguard
+    user: waveguard
+    secureJsonData:
+      password: waveguard123
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: false
+    isDefault: true
+    version: 1
+    editable: true

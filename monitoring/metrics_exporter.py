@@ -1,49 +1,62 @@
 #!/usr/bin/env python3
-# monitoring/metrics_exporter.py
+# monitoring/metrics_exporter_pg.py
 """
-Exportateur de métriques pour WaveGuard.
-Lit les données depuis MinIO et les expose sous forme de JSON pour Grafana.
+Exportateur de métriques vers PostgreSQL
+Lit les données depuis MinIO et les écrit dans PostgreSQL pour Grafana.
 """
 
 import time
-import json
 import os
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, count, sum as spark_sum
+from pyspark.sql.functions import col, count, sum as spark_sum, avg as spark_avg
+import psycopg2
+from psycopg2.extras import execute_values
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-# Où écrire les métriques pour Grafana
-METRICS_FILE = "/tmp/waveguard_metrics.json"
-
-# Chemins MinIO (doivent correspondre à config.py)
 MINIO_BUCKET = "s3a://waveguard"
 NORMAL_PATH = f"{MINIO_BUCKET}/normal"
 FRAUD_PATH = f"{MINIO_BUCKET}/fraud"
 
-# Configuration MinIO
-MINIO_ENDPOINT = "http://minio:9000"
-MINIO_ACCESS_KEY = "admin"
-MINIO_SECRET_KEY = "password123"
+# Configuration PostgreSQL
+PG_HOST = os.getenv("PG_HOST", "postgres")
+PG_PORT = os.getenv("PG_PORT", "5432")
+PG_DATABASE = os.getenv("PG_DATABASE", "waveguard")
+PG_USER = os.getenv("PG_USER", "waveguard")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "waveguard123")
 
-# Intervalle de rafraîchissement (secondes)
+# Configuration MinIO
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "password123")
+
 REFRESH_INTERVAL = 30
 
+# ============================================================
+# CONNEXION POSTGRESQL
+# ============================================================
+
+def get_db_connection():
+    """Crée une connexion à PostgreSQL."""
+    return psycopg2.connect(
+        host=PG_HOST,
+        port=PG_PORT,
+        database=PG_DATABASE,
+        user=PG_USER,
+        password=PG_PASSWORD
+    )
 
 # ============================================================
 # SPARK SESSION
 # ============================================================
 
 def create_spark_session():
-    """
-    Crée une session Spark pour lire les données Parquet dans MinIO.
-    """
     return (
         SparkSession.builder
-        .appName("WaveGuard_MetricsExporter")
+        .appName("WaveGuard_MetricsExporterPG")
         .config("spark.jars.packages", 
                 "org.apache.hadoop:hadoop-aws:3.3.4,"
                 "com.amazonaws:aws-java-sdk-bundle:1.12.262")
@@ -57,37 +70,35 @@ def create_spark_session():
     )
 
 # ============================================================
-# FONCTIONS DE MÉTRIQUES
+# FONCTIONS MÉTRIQUES
 # ============================================================
 
+def safe_format_timestamp(ts):
+    if ts is None:
+        return None
+    if hasattr(ts, 'isoformat'):
+        return ts.isoformat()
+    if isinstance(ts, str):
+        return ts
+    return str(ts)
+
 def get_fraud_metrics(spark):
-    """
-    Calcule les métriques de fraude à partir des alertes stockées.
-    """
     try:
-        # Lire les alertes de fraude
         df_fraud = spark.read.parquet(FRAUD_PATH)
-        
         if df_fraud.count() == 0:
-            return {
-                "total_alerts": 0,
-                "by_type": {},
-                "top_fraudsters": [],
-                "total_amount": 0
-            }
+            return {"total_alerts": 0, "by_type": {}, "top_fraudsters": [], "total_amount": 0}
         
-        # Nombre total d'alertes
         total_alerts = df_fraud.count()
         
-        # Alertes par type (VELOCITY_FRAUD, VOLUME_FRAUD)
-        by_type = (
-            df_fraud.groupBy("fraud_type")
-            .count()
-            .collect()
-        )
-        fraud_by_type = {row["fraud_type"]: row["count"] for row in by_type}
+        # Alertes par type
+        if "score_type" in df_fraud.columns:
+            by_type = df_fraud.groupBy("score_type").count().collect()
+            fraud_by_type = {row["score_type"]: row["count"] for row in by_type}
+        else:
+            by_type = df_fraud.groupBy("risk_level").count().collect()
+            fraud_by_type = {row["risk_level"]: row["count"] for row in by_type}
         
-        # Top 5 fraudeurs (par nombre d'alertes)
+        # Top fraudeurs
         top_fraudsters = (
             df_fraud.groupBy("sender_id")
             .count()
@@ -100,8 +111,7 @@ def get_fraud_metrics(spark):
             for row in top_fraudsters
         ]
         
-        # Montant total frauduleux (pour les alertes VOLUME)
-        total_amount = df_fraud.select(spark_sum("total_amount")).collect()[0][0] or 0
+        total_amount = df_fraud.select(spark_sum("amount_fcfa")).collect()[0][0] or 0
         
         return {
             "total_alerts": total_alerts,
@@ -111,37 +121,21 @@ def get_fraud_metrics(spark):
         }
         
     except Exception as e:
-        print(f"❌ Erreur lors de la lecture des fraudes : {e}")
+        print(f"❌ Erreur fraudes : {e}")
         return {"total_alerts": 0, "by_type": {}, "top_fraudsters": [], "total_amount": 0}
 
 
-
 def get_transaction_metrics(spark):
-    """
-    Calcule les métriques des transactions normales.
-    """
     try:
         df_normal = spark.read.parquet(NORMAL_PATH)
-        
         if df_normal.count() == 0:
-            return {
-                "total_transactions": 0,
-                "average_amount": 0,
-                "total_amount": 0,
-                "by_type": {}
-            }
+            return {"total_transactions": 0, "average_amount": 0, "total_amount": 0, "by_type": {}}
         
-        # Statistiques de base
         total = df_normal.count()
         total_amount = df_normal.select(spark_sum("amount_fcfa")).collect()[0][0] or 0
         avg_amount = total_amount / total if total > 0 else 0
         
-        # Transactions par type (P2P, RETRAIT, etc.)
-        by_type = (
-            df_normal.groupBy("transaction_type")
-            .count()
-            .collect()
-        )
+        by_type = df_normal.groupBy("transaction_type").count().collect()
         tx_by_type = {row["transaction_type"]: row["count"] for row in by_type}
         
         return {
@@ -152,157 +146,176 @@ def get_transaction_metrics(spark):
         }
         
     except Exception as e:
-        print(f"❌ Erreur lors de la lecture des transactions : {e}")
+        print(f"❌ Erreur transactions : {e}")
         return {"total_transactions": 0, "average_amount": 0, "total_amount": 0, "by_type": {}}
 
 
-def get_alert_rate_metrics(fraud_metrics, tx_metrics):
-    """
-    Calcule le taux d'alerte et d'autres métriques dérivées.
-    """
-    total_tx = tx_metrics["total_transactions"]
-    total_alerts = fraud_metrics["total_alerts"]
-    
-    # Taux d'alertes (pourcentage)
-    alert_rate = (total_alerts / (total_tx + total_alerts) * 100) if (total_tx + total_alerts) > 0 else 0
-    
-    # Alertes par minute (estimation basée sur le temps de vie du pipeline)
-    # On pourrait ajouter un timestamp pour calculer le débit
-    
-    return {
-        "alert_rate": round(alert_rate, 2),
-        "alerts_per_transaction": round(total_alerts / total_tx, 4) if total_tx > 0 else 0,
-        "risk_score": min(100, int(alert_rate * 5))  # Score de risque simplifié
-    }
-
-
-def get_recent_activity(spark):
-    """
-    Récupère les 5 dernières alertes pour affichage en temps réel.
-    """
+def get_recent_alerts(spark):
     try:
         df_fraud = spark.read.parquet(FRAUD_PATH)
-        
         if df_fraud.count() == 0:
             return []
         
-        # Trier par timestamp décroissant et prendre les 5 dernières
         recent = (
             df_fraud
-            .orderBy(col("detected_at").desc())
-            .limit(5)
-            .select("sender_id", "fraud_type", "detected_at", "window_start", "window_end")
+            .orderBy(col("timestamp").desc())
+            .limit(10)
+            .select("sender_id", "amount_fcfa", "transaction_type", "timestamp", "location", "risk_level")
             .collect()
         )
         
         return [
             {
-                "sender": row["sender_id"],
-                "type": row["fraud_type"],
-                "detected_at": row["detected_at"].isoformat() if row["detected_at"] else None,
-                "window_start": row["window_start"].isoformat() if row["window_start"] else None,
-                "window_end": row["window_end"].isoformat() if row["window_end"] else None
+                "sender_id": row["sender_id"],
+                "amount": row["amount_fcfa"],
+                "type": row["transaction_type"],
+                "timestamp": safe_format_timestamp(row["timestamp"]),
+                "location": row["location"],
+                "risk_level": row["risk_level"]
             }
             for row in recent
         ]
         
     except Exception as e:
-        print(f"❌ Erreur lors de la récupération des alertes récentes : {e}")
+        print(f"❌ Erreur alerts récentes : {e}")
         return []
 
-
 # ============================================================
-# MÉTRIQUES PRINCIPALES
+# SAUVEGARDE DANS POSTGRESQL
 # ============================================================
 
-def collect_all_metrics(spark):
-    """
-    Collecte toutes les métriques et les retourne sous forme de dictionnaire.
-    """
-    # Métriques de fraude
-    fraud_metrics = get_fraud_metrics(spark)
-    
-    # Métriques de transactions
-    tx_metrics = get_transaction_metrics(spark)
-    
-    # Métriques dérivées
-    derived_metrics = get_alert_rate_metrics(fraud_metrics, tx_metrics)
-    
-    # Alertes récentes
-    recent_alerts = get_recent_activity(spark)
-    
-    # Métriques de performance (à ajouter selon vos besoins)
-    performance_metrics = {
-        "last_update": datetime.now().isoformat(),
-        "uptime_seconds": int(time.time() - start_time) if 'start_time' in globals() else 0
-    }
-    
-    return {
-        "timestamp": time.time(),
-        "datetime": datetime.now().isoformat(),
-        "fraud": fraud_metrics,
-        "transactions": tx_metrics,
-        "derived": derived_metrics,
-        "recent_alerts": recent_alerts,
-        "performance": performance_metrics
-    }
-
-
-def save_metrics(metrics, filepath=METRICS_FILE):
-    """
-    Sauvegarde les métriques au format JSON pour Grafana.
-    """
+def save_metrics_to_postgres(metrics):
+    """Sauvegarde les métriques dans PostgreSQL."""
+    conn = None
+    cur = None
     try:
-        with open(filepath, 'w') as f:
-            json.dump(metrics, f, indent=2, default=str)
-        print(f"✅ Métriques sauvegardées dans {filepath}")
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # 1. Sauvegarder les métriques agrégées
+        metrics_data = [
+            ('fraud_alerts_total', metrics['fraud']['total_alerts'], 'counter'),
+            ('transactions_total', metrics['transactions']['total_transactions'], 'counter'),
+            ('fraud_amount_total', metrics['fraud']['total_amount'], 'counter'),
+        ]
+        
+        # Ajouter l'alert_rate si disponible
+        if 'derived' in metrics:
+            metrics_data.append(('alert_rate', metrics['derived']['alert_rate'], 'gauge'))
+        
+        # Insertion des métriques
+        execute_values(
+            cur,
+            """
+            INSERT INTO metrics_aggregates (metric_name, metric_value, metric_type, recorded_at)
+            VALUES %s
+            """,
+            [(name, value, mtype, datetime.now()) for name, value, mtype in metrics_data],
+            page_size=100
+        )
+        
+        # 2. Sauvegarder les alertes récentes (si pas déjà présentes)
+        if 'recent_alerts' in metrics and metrics['recent_alerts']:
+            alert_values = []
+            for alert in metrics['recent_alerts']:
+                # Vérifier si l'alerte existe déjà
+                cur.execute(
+                    "SELECT 1 FROM fraud_alerts WHERE sender_id = %s AND detected_at = %s",
+                    (alert['sender_id'], alert['timestamp'])
+                )
+                if not cur.fetchone():
+                    # Déterminer le type de fraude
+                    fraud_type = "VOLUME_FRAUD" if alert['amount'] > 500000 else "VELOCITY_FRAUD"
+                    alert_values.append((
+                        alert['sender_id'],
+                        fraud_type,
+                        datetime.now(),
+                        datetime.now(),
+                        alert['amount'],
+                        datetime.now(),
+                        alert.get('risk_level', 'HIGH')
+                    ))
+            
+            if alert_values:
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO fraud_alerts (sender_id, fraud_type, window_start, window_end, metric_value, detected_at, risk_level)
+                    VALUES %s
+                    """,
+                    alert_values,
+                    page_size=100
+                )
+        
+        conn.commit()
+        print(f"✅ Métriques sauvegardées dans PostgreSQL")
         print(f"   📊 Alertes: {metrics['fraud']['total_alerts']}")
         print(f"   📈 Transactions: {metrics['transactions']['total_transactions']}")
-        print(f"   ⚠️  Taux d'alerte: {metrics['derived']['alert_rate']}%")
-        return True
+        
     except Exception as e:
-        print(f"❌ Erreur lors de la sauvegarde : {e}")
-        return False
+        if conn:
+            conn.rollback()
+        print(f"❌ Erreur sauvegarde PostgreSQL : {e}")
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 # ============================================================
 # BOUCLE PRINCIPALE
 # ============================================================
 
 def main():
-    """
-    Boucle principale d'exportation des métriques.
-    """
-    global start_time
-    start_time = time.time()
-    
     print("=" * 60)
-    print("📊 WAVEGUARD - EXPORTATEUR DE MÉTRIQUES")
+    print("📊 WAVEGUARD - EXPORTATEUR POSTGRESQL")
     print("=" * 60)
-    print(f"📁 Fichier de sortie : {METRICS_FILE}")
     print(f"🔄 Intervalle : {REFRESH_INTERVAL} secondes")
-    print(f"💾 Source : {MINIO_BUCKET}")
+    print(f"🐘 PostgreSQL : {PG_HOST}:{PG_PORT}/{PG_DATABASE}")
+    print(f"💾 Source MinIO : {MINIO_BUCKET}")
     print("=" * 60)
     
-    # Créer la session Spark
+    # Vérifier la connexion PostgreSQL
+    try:
+        conn = get_db_connection()
+        conn.close()
+        print("✅ Connexion PostgreSQL OK")
+    except Exception as e:
+        print(f"❌ Erreur connexion PostgreSQL : {e}")
+        print("   Vérifiez que PostgreSQL est démarré")
+        return
+    
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
-    
     print("✅ Session Spark créée")
-    
-    # Créer le dossier parent si nécessaire
-    os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
     
     try:
         while True:
             print(f"\n🔄 Collecte des métriques...")
             
-            # Collecter toutes les métriques
-            metrics = collect_all_metrics(spark)
+            # Collecter les métriques
+            fraud_metrics = get_fraud_metrics(spark)
+            tx_metrics = get_transaction_metrics(spark)
+            recent_alerts = get_recent_alerts(spark)
             
-            # Sauvegarder
-            save_metrics(metrics)
+            # Calculer le taux d'alerte
+            total_tx = tx_metrics["total_transactions"]
+            total_alerts = fraud_metrics["total_alerts"]
+            alert_rate = (total_alerts / (total_tx + total_alerts) * 100) if (total_tx + total_alerts) > 0 else 0
             
-            # Attendre le prochain cycle
+            # Construire le payload
+            metrics = {
+                "timestamp": time.time(),
+                "datetime": datetime.now().isoformat(),
+                "fraud": fraud_metrics,
+                "transactions": tx_metrics,
+                "derived": {"alert_rate": round(alert_rate, 2)},
+                "recent_alerts": recent_alerts
+            }
+            
+            # Sauvegarder dans PostgreSQL
+            save_metrics_to_postgres(metrics)
+            
             time.sleep(REFRESH_INTERVAL)
             
     except KeyboardInterrupt:
