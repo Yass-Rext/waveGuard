@@ -28,3 +28,6 @@ AUDIT_PATH = "s3a://waveguard/audit"
 # Checkpoints (gardés en local pour la performance)
 # ============================================================
 CHECKPOINT_DIR = "/tmp/waveguard_checkpoints"
+
+
+
